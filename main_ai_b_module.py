@@ -10,7 +10,7 @@ from langchain_core.output_parsers import PydanticOutputParser
 
 # --- 1. Pydantic 모델 (API 입/출력 명세) ---
 
-# 💡 (수정 1: 출력) BE B/FE가 요청한대로 'price' 필드 추가
+#   BE B/FE가 요청한대로 'price' 필드 추가
 class RecommendedMenu(BaseModel):
     """FE의 Result 화면에 바인딩될 최종 메뉴 1개 정보"""
     restaurant_name: str = Field(description="식당 이름")
@@ -22,7 +22,7 @@ class RecommendedMenu(BaseModel):
         description="추천 이유를 요약하는 3-5개의 해시태그 (예: ['#속편한', '#든든한', '#가성비'])"
     )
 
-# 💡 (수정 2: 출력) UI/BE B 요청대로 List가 아닌 '끼니 슬롯' 형태로 변경
+#   UI/BE B 요청대로 List가 아닌 '끼니 슬롯' 형태로 변경
 class FinalRecommendation(BaseModel):
     """최종 API 응답 형식 (FE의 Result 화면과 일치)"""
     morning: Optional[RecommendedMenu] = Field(
@@ -36,7 +36,7 @@ class FinalRecommendation(BaseModel):
     )
 
 
-# 💡 (수정 3: 입력) AI A / BE A가 전달할 '가격' 정보 추가
+#   AI A / BE A가 전달할 '가격' 정보 추가
 class MenuCandidate(BaseModel):
     """메인 BE(or AI A)에서 전달받을 1차 필터링 후보"""
     restaurant_name: str
@@ -46,13 +46,13 @@ class MenuCandidate(BaseModel):
     tags: List[str]
 
 
-# 💡 (수정 4: 입력) BE A가 요청한 가격 범위 객체
+#   BE A가 요청한 가격 범위 객체
 class PriceRange(BaseModel):
     min: Optional[int] = None
     max: Optional[int] = None
 
 
-# 💡 (수정 5: 입력) BE A가 요청한 모든 정보를 받는 메인 객체
+#   BE A가 요청한 모든 정보를 받는 메인 객체
 class RecommendationRequest(BaseModel):
     """AI B 모듈이 받을 요청 Body 전체"""
     candidates: List[MenuCandidate]
@@ -68,7 +68,7 @@ class RecommendationRequest(BaseModel):
     conversation_history: Optional[List[str]] = []  # (확장용) 대화 이력
 
 
-# --- 2. LangChain 및 LLM 설정 (AI 두뇌) ---
+# --- 2. LangChain 및 LLM 설정 ---
 
 # OpenAI API 키 설정 (환경 변수에서 불러오는 것을 권장)
 # os.environ["OPENAI_API_KEY"] = "sk-..."
@@ -156,13 +156,13 @@ async def get_refined_recommendations(request: RecommendationRequest):
 
     # --- 2. LLM 입력값 가공 ---
 
-    # 💡 (수정 7: 로직) 후보 리스트 문자열에 '가격' 포함
+    #   후보 리스트 문자열에 '가격' 포함
     candidates_str = "\n".join(
         [f"- {c.restaurant_name} '{c.menu_name}' (가격: {c.price}원, 점수: {c.base_score}, 태그: {c.tags})"
          for c in request.candidates]
     )
 
-    # 💡 (수정 8: 로직) 가격 제한 객체를 LLM이 알아들을 문자열로 변환
+    #   가격 제한 객체를 LLM이 알아들을 문자열로 변환
     price_str = "제한 없음"
     if request.price:
         parts = []
@@ -173,7 +173,7 @@ async def get_refined_recommendations(request: RecommendationRequest):
         if parts:
             price_str = " ".join(parts)
 
-    # 💡 (수정 9: 로직) 목표 끼니 리스트를 문자열로 변환
+    #   목표 끼니 리스트를 문자열로 변환
     target_meals_str = ", ".join(request.target_meals)  # 예: "lunch, dinner"
 
     # --- 3. LLM 체인 호출 (AI B의 핵심 작업) ---
