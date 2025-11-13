@@ -10,7 +10,6 @@ from langchain_core.output_parsers import PydanticOutputParser
 
 # --- 1. Pydantic 모델 (API 입/출력 명세) ---
 
-#   BE B/FE가 요청한대로 'price' 필드 추가
 class RecommendedMenu(BaseModel):
     """FE의 Result 화면에 바인딩될 최종 메뉴 1개 정보"""
     restaurant_name: str = Field(description="식당 이름")
@@ -22,9 +21,8 @@ class RecommendedMenu(BaseModel):
         description="추천 이유를 요약하는 3-5개의 해시태그 (예: ['#속편한', '#든든한', '#가성비'])"
     )
 
-#   UI/BE B 요청대로 List가 아닌 '끼니 슬롯' 형태로 변경
 class FinalRecommendation(BaseModel):
-    """최종 API 응답 형식 (FE의 Result 화면과 일치)"""
+    """최종 API 응답 형식"""
     morning: Optional[RecommendedMenu] = Field(
         default=None, description="추천 아침 메뉴 (해당 없으면 null)"
     )
@@ -36,7 +34,6 @@ class FinalRecommendation(BaseModel):
     )
 
 
-#   AI A / BE A가 전달할 '가격' 정보 추가
 class MenuCandidate(BaseModel):
     """메인 BE(or AI A)에서 전달받을 1차 필터링 후보"""
     restaurant_name: str
@@ -79,7 +76,7 @@ parser = PydanticOutputParser(pydantic_object=FinalRecommendation)
 # 2. LLM 모델: GPT-4 mini 사용, temperature=0.6 (랜덤한 답변)
 llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.6)
 
-# 💡 (수정 6: 프롬프트) 가격, 끼니 정보를 모두 포함하도록 LLM 지시서 수정
+# 가격, 끼니 정보를 모두 포함하도록 LLM 지시서 수정
 prompt_template = """
 당신은 고려대학교 근처 맛집 메뉴 추천 AI 'MenuMate'입니다.
 사용자의 세부 요청과 AI A가 1차 필터링한 메뉴 후보 리스트를 받았습니다.
