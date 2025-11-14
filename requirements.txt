@@ -1,19 +1,13 @@
-# FastAPI & Server
 fastapi
 uvicorn[standard]
-
-# Pydantic (data validation)
-pydantic
-
-# Database (Cache)
-redis
-
-# Data Handling & ML (AI A 로직에 필수)
 pandas
 numpy
 scikit-learn
+redis
+python-dotenv
+sqlalchemy
+langchain-openai
 
-# LLM & LangChain (AI B 로직에 필수)
-langchain-core       # ChatPromptTemplate, PydanticOutputParser
-langchain-openai     # ChatOpenAI
-openai               # langchain-openai가 자동으로 설치해주긴 하지만, 명시
+# --- 데이터베이스 드라이버 ---
+# PostgreSQL을 사용하시는 경우 (기본 예시)
+psycopg2-binary
