@@ -1,7 +1,19 @@
+# FastAPI & Server
 fastapi
 uvicorn[standard]
+
+# Pydantic (data validation)
 pydantic
+
+# Database (Cache)
 redis
-langchain
-langchain-openai
-openai
+
+# Data Handling & ML (AI A 로직에 필수)
+pandas
+numpy
+scikit-learn
+
+# LLM & LangChain (AI B 로직에 필수)
+langchain-core       # ChatPromptTemplate, PydanticOutputParser
+langchain-openai     # ChatOpenAI
+openai               # langchain-openai가 자동으로 설치해주긴 하지만, 명시
