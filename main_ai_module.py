@@ -5,11 +5,11 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 from typing import List, Optional
 from sklearn.preprocessing import StandardScaler
-from datetime import datetime
+from datetime import datetime, time  # <-- 1. 'time' 임포트
 import redis
 import uvicorn
-from dotenv import load_dotenv  # <-- .env 로드 라이브러리
-from sqlalchemy import create_engine, text  # <-- SQLAlchemy 임포트
+from dotenv import load_dotenv
+from sqlalchemy import create_engine, text
 
 # LangChain 및 OpenAI 관련 임포트
 from langchain_openai import ChatOpenAI
@@ -46,21 +46,21 @@ class UserPreferences(BaseModel):
     user_id: Optional[int] = None
     budget: Optional[int] = Field(default=10000, description="최대 예산 (원)")
     min_budget: Optional[int] = Field(default=None, description="최소 예산 (원)")
-    preferred_categories: List[str] = Field(default=[], description="선호 카테고리")
-    meal_type: str = Field(default="점심", description="식사 시간대: 아침/점심/저녁")
+    preferred_categories: List[str] = Field(default=[], description="선호 카테고리 (사용 안 함. 'location'으로 대체됨)")
+    meal_type: str = Field(default="점심", description="식사 시간대: 아침/점심/저녁 (시간 필터링에 사용)")
     target_meals: List[str] = Field(default=["lunch"], description="['morning', 'lunch', 'dinner']")
     user_prompt: str = Field(default="", description="사용자 세부 요청")
 
-    # [수정됨] 영양 관련 선호도 축소 (DB에 정보 없음)
+    # 영양 관련 선호도
     prefer_high_protein: bool = Field(default=False, description="고단백 선호 (비활성화)")
     prefer_low_calorie: bool = Field(default=False, description="저칼로리 선호 (유일하게 사용)")
     prefer_low_sodium: bool = Field(default=False, description="저나트륨 선호 (비활성화)")
 
-    # [중요] 사용자의 '목표' 카테고리 (예: 'vegan', 'muslim')
+    # 사용자의 '목표' 카테고리 (예: 'vegan', 'muslim', 'low_sugar')
     category: Optional[str] = Field(default=None, description="카테고리")
     height: Optional[int] = Field(default=None, description="키")
     weight: Optional[int] = Field(default=None, description="몸무게")
-    location: List[str] = Field(default=[], description="위치 정보")
+    location: List[str] = Field(default=[], description="위치 정보 (캠퍼스 필터링에 사용)")
 
 
 # AI A와 B가 공통으로 사용하는 모델들 (기존과 동일)
@@ -100,13 +100,12 @@ class FinalRecommendation(BaseModel):
     dinner: Optional[RecommendedMenu] = Field(default=None, description="추천 저녁 메뉴")
 
 
-# --- 2. 입력 변환 함수 (기존과 동일) ---
+# --- 2. 입력 변환 함수 (수정됨) ---
 
 def convert_user_input(user_input: UserInput) -> UserPreferences:
     """
     (수정됨) 프론트엔드 JSON 형식을 내부 처리용 UserPreferences로 변환
-    - 'DIET' 카테고리는 'prefer_low_calorie' 플래그로 변환됩니다.
-    - 'VEGAN', 'MUSLIM'은 'category' 필드에 그대로 전달됩니다.
+    - 'location' 필드를 'preferred_categories'가 아닌 'location' 필드에 그대로 전달
     """
     # 식사 타입 변환
     meal_mapping = {
@@ -121,39 +120,34 @@ def convert_user_input(user_input: UserInput) -> UserPreferences:
         "lunch": "점심",
         "dinner": "저녁"
     }
+    # [수정] 첫 번째 식사 타입을 'meal_type'으로 설정 (시간 필터링용)
     meal_type = meal_type_mapping.get(target_meals[0], "점심") if target_meals else "점심"
 
-    # [수정됨] 카테고리에 따른 영양 선호도 설정 (저칼로리만 남김)
+    # 'DIET'일 때만 저칼로리 플래그 활성화
     prefer_low_calorie = False
-
     if user_input.category.upper() == "DIET":
         prefer_low_calorie = True
 
-    # [수정됨] 고단백, 저나트륨 로직은 DB에 정보가 없으므로 항상 False
     prefer_high_protein = False
     prefer_low_sodium = False
 
-    # [선택적] 위치 정보를 선호 카테고리로 매핑 (예시)
+    # [수정] 'location'을 'preferred_categories'로 변환하는 로직 제거
     preferred_categories = []
-    if "science_campus" in user_input.location:
-        preferred_categories.append("자연계캠퍼스")
-    if "humanities_campus" in user_input.location:
-        preferred_categories.append("인문계캠퍼스")
 
     return UserPreferences(
         budget=user_input.priceRange.maxPrice,
         min_budget=user_input.priceRange.minPrice,
-        preferred_categories=preferred_categories,  # <- DB 카테고리 필터링에 사용
+        preferred_categories=preferred_categories,  # <- 이제 사용 안 함
         meal_type=meal_type,
         target_meals=target_meals,
         user_prompt=user_input.prompt,
-        prefer_high_protein=prefer_high_protein,  # 항상 False
-        prefer_low_calorie=prefer_low_calorie,  # 'DIET'일 때만 True
-        prefer_low_sodium=prefer_low_sodium,  # 항상 False
-        category=user_input.category,  # <-- 'VEGAN', 'MUSLIM' 등 필터링을 위해 전달
+        prefer_high_protein=prefer_high_protein,
+        prefer_low_calorie=prefer_low_calorie,
+        prefer_low_sodium=prefer_low_sodium,
+        category=user_input.category,  # <-- 'VEGAN', 'MUSLIM', 'LOW_SUGAR' 전달
         height=user_input.diet.height if user_input.diet else None,
         weight=user_input.diet.weight if user_input.diet else None,
-        location=user_input.location
+        location=user_input.location  # <-- 'science_campus' 등을 그대로 전달
     )
 
 
@@ -161,21 +155,20 @@ def convert_user_input(user_input: UserInput) -> UserPreferences:
 
 class MenuDataPreprocessor:
     """
-    (수정됨) '열량', '가격', '태그', '카테고리' 기반 메뉴 데이터 전처리
-    - 'tags', 'category'를 DB에서 직접 불러온다고 가정합니다.
+    (수정됨) '열량', '가격', '태그', '카테고리', '평점', '영업시간', '캠퍼스' 기반 전처리
     """
 
     def __init__(self):
         self.scaler = StandardScaler()
         self.menu_features = None
         self.menu_df = None
-        self.db_engine = self._create_db_engine()  # <-- DB 엔진 초기화
+        self.db_engine = self._create_db_engine()
 
     def _create_db_engine(self):
         """
         .env 파일의 정보로 SQLAlchemy DB 엔진 생성
         """
-        load_dotenv()  # <-- .env 파일 로드
+        load_dotenv()
         db_user = os.environ.get("DB_USER")
         db_pass = os.environ.get("DB_PASSWORD")
         db_host = os.environ.get("DB_HOST")
@@ -186,7 +179,6 @@ class MenuDataPreprocessor:
             print("경고: DB 접속 정보(.env)가 불완전합니다. DB 로드에 실패할 수 있습니다.")
             return None
 
-        # [수정] 사용하는 DB에 맞게 연결 문자열(DATABASE_URL) 변경
         # (예: PostgreSQL)
         DATABASE_URL = f"postgresql+psycopg2://{db_user}:{db_pass}@{db_host}:{db_port}/{db_name}"
 
@@ -205,13 +197,15 @@ class MenuDataPreprocessor:
 
     def load_nutrition_data(self):
         """
-        (수정됨) SQLAlchemy와 pd.read_sql을 사용해 DB에서 직접 데이터를 로드합니다.
+        (수정됨) SQL 쿼리에 'rating', 'open_time', 'close_time', 'campus' 추가
         """
 
         if self.db_engine is None:
             print("오류: DB 엔진이 초기화되지 않았습니다. 샘플 데이터로 대체합니다.")
-            df = self._get_sample_data()  # <-- 실패 시 샘플 데이터 사용
+            df = self._get_sample_data()
         else:
+            # --- [수정됨] 새 DB 스키마에 맞는 SQL 쿼리 ---
+            # (PostgreSQL 기준 'STRING_AGG' 사용. MySQL은 'GROUP_CONCAT'으로 변경)
             sql_query = """
             SELECT
                 m.name AS "제품명",
@@ -219,9 +213,25 @@ class MenuDataPreprocessor:
                 m.price AS "가격",
                 m.calories AS "열량",
                 m.tags AS "태그",         
-                m.category AS "카테고리"  
+
+                -- 레스토랑 정보 추가
+                r.rating AS "평점",
+                r.open_time AS "오픈시간",
+                r.close_time AS "마감시간",
+                r.campus AS "캠퍼스",
+
+                -- N:M 관계의 카테고리들 (예: "한식,채식,저당")
+                STRING_AGG(c.name, ',') AS "카테고리"
+
             FROM menus m
             JOIN restaurants r ON m.restaurants_id = r.restaurants_id
+
+            LEFT JOIN menu_categories mc ON m.restaurants_id = mc.restaurants_id AND m.name = mc.name
+            LEFT JOIN categories c ON mc.category_id = c.category_id
+
+            -- [수정됨] GROUP BY 절에 레스토랑 정보 추가
+            GROUP BY m.restaurants_id, m.name, r.name, m.price, m.calories, m.tags, 
+                     r.rating, r.open_time, r.close_time, r.campus
             """
 
             try:
@@ -232,21 +242,35 @@ class MenuDataPreprocessor:
                 print(f"❌ DB 데이터 로드 실패: {e}. 샘플 데이터로 대체합니다.")
                 df = self._get_sample_data()
 
-        # --- (이하 로직은 기존과 동일) ---
+        # --- (이하 로직 수정) ---
 
-        # '열량'이 없는 경우 (예: 0 또는 None) 중앙값으로 대체
+        # [신규] 시간 타입 변환 (DB가 'HH:MM:SS' 텍스트 형태일 경우)
+        # NaT (Not a Time)은 None으로 처리
+        df['오픈시간'] = pd.to_datetime(df['오픈시간'], format='%H:%M:%S', errors='coerce').dt.time
+        df['마감시간'] = pd.to_datetime(df['마감시간'], format='%H:%M:%S', errors='coerce').dt.time
+
+        # [신규] 평점 처리 (결측치는 3.0점으로 간주)
+        df['평점'] = pd.to_numeric(df['평점'], errors='coerce').fillna(3.0)
+
+        # [신규] 캠퍼스 처리 (결측치는 '정보없음'으로 간주)
+        df['캠퍼스'] = df['캠퍼스'].fillna('정보없음')
+
+        # '열량' 처리 (결측치는 중앙값으로)
         df['열량'] = pd.to_numeric(df['열량'], errors='coerce')
         df['열량'] = df['열량'].fillna(df['열량'].median())
 
-        # DB에서 '태그'를 문자열(예: "밥,국물")로 가져왔다고 가정하고 리스트로 변환
+        # '태그' 리스트 변환
         if '태그' in df.columns:
             df['태그'] = df['태그'].fillna('').apply(lambda x: x.split(',') if isinstance(x, str) and x else [])
         else:
             df['태그'] = [[] for _ in range(len(df))]
             print("경고: '태그' 컬럼이 DB에 없습니다.")
 
-        if '카테고리' not in df.columns:
-            df['카테고리'] = '기타'
+        # '카테고리' 리스트 변환
+        if '카테고리' in df.columns:
+            df['카테고리'] = df['카테고리'].fillna('').apply(lambda x: x.split(',') if isinstance(x, str) and x else [])
+        else:
+            df['카테고리'] = [[] for _ in range(len(df))]
             print("경고: '카테고리' 컬럼이 DB에 없습니다.")
 
         self.menu_df = df
@@ -255,25 +279,27 @@ class MenuDataPreprocessor:
 
     def _get_sample_data(self):
         """
-        DB 연결 실패 시 사용하는 하드코딩된 샘플 데이터
-        (VEGAN, MUSLIM 테스트를 위해 샘플 데이터 수정)
+        DB 연결 실패 시 사용하는 샘플 데이터 (평점, 시간, 캠퍼스 추가)
         """
         print("샘플 데이터를 사용합니다...")
         return pd.DataFrame([
-            {'제품명': '김치찌개', '식당명': '한식당 A', '가격': 8000, '열량': 480, '카테고리': '한식', '태그': '밥,국물,든든한,돼지고기'},  # '돼지고기' 태그
-            {'제품명': '비건 비빔밥', '식당명': '한식당 A', '가격': 8000, '열량': 550, '카테고리': '한식', '태그': '밥,야채,건강한,비건'},  # '비건' 태그
-            {'제품명': '제육볶음', '식당명': '한식당 B', '가격': 8500, '열량': 620, '카테고리': '한식', '태그': '밥,고기,든든한,매콤한,돼지고기'},
-            # '돼지고기' 태그
-            {'제품명': '냉면', '식당명': '한식당 C', '가격': 9000, '열량': 420, '카테고리': '한식', '태그': '면,시원한,여름'},
-            {'제품명': '돈까스', '식당명': '일식당 A', '가격': 9000, '열량': 750, '카테고리': '일식', '태그': '밥,튀김,든든한,돼지고기'},  # '돼지고기' 태그
-            {'제품명': '치킨 샐러드', '식당명': '샐러드 전문점', '가격': 7000, '열량': 310, '카테고리': '양식', '태그': '샐러드,가벼운,다이어트,고단백,할랄'},
-            # '할랄' 태그
-            {'제품명': '두부 샌드위치', '식당명': '샌드위치 전문점', '가격': 7500, '열량': 372, '카테고리': '양식', '태그': '샌드위치,가벼운,비건'},  # '비건' 태그
+            {'제품명': '김치찌개', '식당명': '한식당 A', '가격': 8000, '열량': 480, '카테고리': '한식,인문계캠퍼스', '태그': '밥,국물,돼지고기', '평점': 4.2,
+             '오픈시간': '10:00:00', '마감시간': '22:00:00', '캠퍼스': '인문계캠퍼스'},
+            {'제품명': '비건 비빔밥', '식당명': '한식당 A', '가격': 8000, '열량': 550, '카테고리': '한식,인문계캠퍼스,채식', '태그': '밥,야채,비건', '평점': 4.2,
+             '오픈시간': '10:00:00', '마감시간': '22:00:00', '캠퍼스': '인문계캠퍼스'},
+            {'제품명': '제육볶음', '식당명': '한식당 B', '가격': 8500, '열량': 620, '카테고리': '한식,자연계캠퍼스', '태그': '밥,고기,돼지고기', '평점': 4.0,
+             '오픈시간': '09:00:00', '마감시간': '21:00:00', '캠퍼스': '자연계캠퍼스'},
+            {'제품명': '심야 라멘', '식당명': '일식당 C', '가격': 9000, '열량': 650, '카테고리': '일식,자연계캠퍼스', '태그': '면,국물', '평점': 4.5,
+             '오픈시간': '18:00:00', '마감시간': '02:00:00', '캠퍼스': '자연계캠퍼스'},  # 야간 영업
+            {'제품명': '치킨 케밥', '식당명': '케밥 전문점', '가격': 7000, '열량': 310, '카테고리': '기타,자연계캠퍼스,무슬림', '태그': '빵,가벼운,할랄',
+             '평점': 4.8, '오픈시간': '11:00:00', '마감시간': '20:00:00', '캠퍼스': '자연계캠퍼스'},
+            {'제품명': '저당 비건 샌드위치', '식당명': '샌드위치 전문점', '가격': 7500, '열량': 372, '카테고리': '양식,인문계캠퍼스,채식,저당', '태그': '샌드위치,비건',
+             '평점': 4.1, '오픈시간': '08:00:00', '마감시간': '17:00:00', '캠퍼스': '인문계캠퍼스'},  # 아침 가능
         ])
 
     def extract_features(self):
         """
-        (수정됨) '열량', '가격', '태그', '카테고리' 기반 피처 추출
+        (수정됨) '평점'을 수치형 피처에, '캠퍼스'를 더미 피처에 추가
         """
         if self.menu_df is None:
             print("오류: 메뉴 데이터가 로드되지 않았습니다.")
@@ -281,7 +307,8 @@ class MenuDataPreprocessor:
 
         df = self.menu_df.copy()
 
-        numeric_features = ['열량', '가격']
+        # [수정] '평점'을 수치형 피처에 추가
+        numeric_features = ['열량', '가격', '평점']
 
         for col in numeric_features:
             if col in df.columns:
@@ -298,10 +325,18 @@ class MenuDataPreprocessor:
         if '가격' in df.columns:
             df['가격_레벨'] = pd.cut(df['가격'], bins=[-np.inf, 7000, 9000, np.inf], labels=[0, 1, 2], right=True)
 
-        if '카테고리' in df.columns:
-            category_dummies = pd.get_dummies(df['카테고리'], prefix='카테고리')
-            df = pd.concat([df, category_dummies], axis=1)
+        # [신규] '캠퍼스' (단일 값) 원-핫 인코딩
+        if '캠퍼스' in df.columns:
+            campus_dummies = pd.get_dummies(df['캠퍼스'], prefix='캠퍼스')
+            df = pd.concat([df, campus_dummies], axis=1)
 
+        # '카테고리' (다중 값) 원-핫 인코딩
+        if '카테고리' in df.columns:
+            all_categories = set(cat for cats in df['카테고리'] for cat in cats if cat)
+            for cat in all_categories:
+                df[f'카테고리_{cat}'] = df['카테고리'].apply(lambda x: 1 if cat in x else 0)
+
+        # '태그' (다중 값) 원-핫 인코딩
         if '태그' in df.columns:
             all_tags = set(tag for tags in df['태그'] for tag in tags if tag)
             for tag in all_tags:
@@ -316,7 +351,8 @@ class MenuDataPreprocessor:
             print("경고: 정규화할 수치형 피처가 없습니다.")
 
         tag_cols = [col for col in df.columns if col.startswith('태그_')]
-        category_cols = [col for col in df.columns if col.startswith('카테고리_')]
+        # [수정] 카테고리 피처에 '캠퍼스_'도 포함
+        category_cols = [col for col in df.columns if col.startswith('카테고리_') or col.startswith('캠퍼스_')]
         level_cols = ['칼로리_레벨', '가격_레벨']
         level_cols = [col for col in level_cols if col in df.columns]
 
@@ -329,51 +365,112 @@ class MenuDataPreprocessor:
 
     def calculate_scores(self, user_preferences: UserPreferences):
         """
-        (수정됨) VEGAN, MUSLIM 강력한 필터 조건 추가
+        (수정됨) 캠퍼스 필터, 영업시간 필터, 평점 가산점 추가
         """
         if self.menu_df is None:
             raise ValueError("메뉴 데이터가 로드되지 않았습니다.")
 
         df = self.menu_df.copy()
-        # [수정] 점수 계산을 1점으로 시작
-        scores = np.ones(len(df))
+        scores = np.ones(len(df))  # 1점으로 시작
 
-        # --- [새로 추가된 강력한 필터 로직] ---
-        # 이 필터들은 '가산점'이 아닌 '제외' 필터입니다.
-        if user_preferences.category and '태그' in df.columns:
+        # --- [1. 강력한 필터 로직 (Hard Filters)] ---
+
+        # (A) VEGAN/MUSLIM/LOW_SUGAR 필터 (DB '카테고리' 컬럼 검사)
+        if user_preferences.category and '카테고리' in df.columns:
             category_upper = user_preferences.category.upper()
 
-            if category_upper == "VEGAN":
-                # '태그'에 '비건' 또는 'vegan'이 없는 메뉴를 찾습니다.
-                is_not_vegan = df['태그'].apply(
-                    lambda tags: '비건' not in tags and 'vegan' not in tags
+            # (DB의 'categories' 테이블에 저장된 이름과 일치해야 함)
+            if category_upper == "채식":
+                is_not_vegan = df['카테고리'].apply(
+                    lambda cats: '채식' not in cats and '비건' not in cats
                 )
-                scores[is_not_vegan] = 0.0  # 해당 메뉴 제외
+                scores[is_not_vegan] = 0.0
 
-            if category_upper == "MUSLIM":
-                # '태그'에 '할랄'이 없거나, '돼지고기' 태그가 있는 메뉴를 찾습니다.
-                is_not_muslim = df['태그'].apply(
-                    lambda tags: ('할랄' not in tags) or ('돼지고기' in tags)
+            if category_upper == "무슬림":
+                is_not_muslim = df['카테고리'].apply(
+                    lambda cats: '무슬림' not in cats and '할랄' not in cats
                 )
-                scores[is_not_muslim] = 0.0  # 해당 메뉴 제외
-        # --- [여기까지] ---
+                scores[is_not_muslim] = 0.0
 
-        # 1. 예산 적합도 (하드 필터)
+                if '태그' in df.columns:
+                    has_pork = df['태그'].apply(lambda tags: '돼지고기' in tags)
+                    scores[has_pork] = 0.0  # '돼지고기' 태그가 있어도 제외
+
+            if category_upper == "저당":
+                is_not_low_sugar = df['카테고리'].apply(
+                    lambda cats: '저당' not in cats
+                )
+                scores[is_not_low_sugar] = 0.0
+
+
+        # '문캠', '이캠', '문이캠' 이렇게도 고려..?
+        # (B) [신규] Location(Campus) 필터 (DB '캠퍼스' 컬럼 검사)
+        if user_preferences.location and '캠퍼스' in df.columns:
+            # 1. Map 'science_campus' -> '자연계캠퍼스'
+            location_map = {
+                'science_campus': '자연계캠퍼스',
+                'humanities_campus': '인문계캠퍼스'
+            }
+            # 2. Get the list of target campuses (e.g., ['자연계캠퍼스'])
+            target_campuses = [location_map.get(loc) for loc in user_preferences.location if location_map.get(loc)]
+
+            if target_campuses:
+                # 3. Check if the menu's '캠퍼스' is in the target list
+                is_not_in_campus = ~df['캠퍼스'].isin(target_campuses)
+                scores[is_not_in_campus] = 0.0
+
+        # (C) [신규] Operating Time 필터 (DB '오픈/마감시간' 검사)
+        meal_time_map = {
+            '아침': time(9, 0),  # 9:00 AM
+            '점심': time(13, 0),  # 1:00 PM
+            '저녁': time(19, 0)  # 7:00 PM
+        }
+        # 'meal_type' (아침/점심/저녁)을 기준으로 필터링
+        target_time = meal_time_map.get(user_preferences.meal_type)
+
+        if target_time and '오픈시간' in df.columns and '마감시간' in df.columns:
+
+            def is_open(row):
+                open_t = row['오픈시간']
+                close_t = row['마감시간']
+
+                # Handle missing data
+                if pd.isna(open_t) or pd.isna(close_t):
+                    return True  # Don't filter if data is missing
+
+                if open_t <= close_t:
+                    # Normal case (e.g., 09:00 - 22:00)
+                    return open_t <= target_time <= close_t
+                else:
+                    # Overnight case (e.g., 21:00 - 02:00)
+                    return target_time >= open_t or target_time <= close_t
+
+            is_not_open = ~df.apply(is_open, axis=1)
+            scores[is_not_open] = 0.0
+
+        # --- [2. 가산점 로직 (Soft Filters)] ---
+
+        # (A) 예산 적합도 (하드 필터 + 가산점)
         if (user_preferences.budget is not None) and (user_preferences.budget > 0) and ('가격' in df.columns):
             within = df['가격'] <= user_preferences.budget
-            scores[~within.values] = 0.0  # 예산 초과 메뉴 제외
+            scores[~within.values] = 0.0
 
             if user_preferences.min_budget:
                 within_min = df['가격'] >= user_preferences.min_budget
-                scores[~within_min.values] = 0.0  # 최소 예산 미만 메뉴 제외
+                scores[~within_min.values] = 0.0
 
-            # [수정] 살아남은 메뉴(0점 아님)에만 예산 근접 가산점 부여
-            if scores.sum() > 0:  # 살아남은 메뉴가 있을 때만
+            if scores.sum() > 0:
                 price_diff = (df['가격'] - user_preferences.budget).abs()
                 price_score = 1 - (price_diff / max(user_preferences.budget, 1)).clip(0, 1)
                 scores[scores > 0] += price_score[scores > 0] * 3.0
 
-        # 2. 사용자 프롬프트 키워드 매칭 (하드 필터 + 가산점)
+        # (B) [신규] Rating(평점) 가산점
+        if '평점' in df.columns:
+            # 평점을 0-1 스케일로 변환 (5점 만점 기준)
+            rating_score = (df['평점'] / 5.0)
+            scores[scores > 0] += rating_score[scores > 0] * 1.5  # 1.5 가중치
+
+        # (C) 사용자 프롬프트 (태그)
         if user_preferences.user_prompt and '태그' in df.columns:
             prompt_lower = user_preferences.user_prompt.lower()
 
@@ -392,41 +489,33 @@ class MenuDataPreprocessor:
             if '가벼운' in prompt_lower: positive_keywords.append('가벼운')
             if '든든한' in prompt_lower: positive_keywords.append('든든한')
 
-            # 부정 키워드 (하드 필터)
             for neg_keyword in negative_keywords:
                 has_negative = df['태그'].apply(
                     lambda tags: any(neg_keyword in tag for tag in tags) if isinstance(tags, list) else False
                 )
                 scores[has_negative] = 0.0
 
-            # [수정] 긍정 키워드 (가산점) - 살아남은 메뉴에만
             for pos_keyword in positive_keywords:
                 has_positive = df['태그'].apply(
                     lambda tags: any(pos_keyword in tag for tag in tags) if isinstance(tags, list) else False
                 )
                 scores[scores > 0] += has_positive.astype(float)[scores > 0] * 2.0
 
-        # 3. 카테고리 매칭 (가산점)
+        # (D) 카테고리 매칭 (예: '한식', '일식') - UserInput에 이 필드가 없으므로 현재 비활성
         if user_preferences.preferred_categories and '카테고리' in df.columns:
             for category in user_preferences.preferred_categories:
-                category_match = df['카테고리'].str.contains(category, case=False, na=False)
-                # [수정] 살아남은 메뉴에만 가산점
-                scores[scores > 0] += category_match.astype(float)[scores > 0] * 2.0
+                has_category = df['카테고리'].apply(
+                    lambda cats: category in cats if isinstance(cats, list) else False
+                )
+                scores[scores > 0] += has_category.astype(float)[scores > 0] * 2.0
 
-        # 4. 영양 선호도 (가산점 - DIET)
-
-        # --- [제거됨] (단백질 점수 로직) ---
-
-        # --- [유지] (저칼로리)
+        # (E) 영양 선호도 (DIET)
         if user_preferences.prefer_low_calorie and '열량' in df.columns:
             if df['열량'].max() > df['열량'].min():
                 calorie_score = 1 - ((df['열량'] - df['열량'].min()) / (df['열량'].max() - df['열량'].min()))
-                # [수정] 살아남은 메뉴에만 가산점
                 scores[scores > 0] += calorie_score[scores > 0] * 1.5
 
-        # --- [제거됨] (나트륨 점수 로직) ---
-
-        # 5. 식사 시간대 적합도 (가산점)
+        # (F) 식사 시간대 (태그)
         if '태그' in df.columns:
             meal_tags = {
                 '아침': ['가벼운', '샌드위치', '샐러드'],
@@ -436,7 +525,6 @@ class MenuDataPreprocessor:
             if user_preferences.meal_type in meal_tags:
                 for tag in meal_tags[user_preferences.meal_type]:
                     tag_match = df['태그'].apply(lambda tags: tag in tags if isinstance(tags, list) else False)
-                    # [수정] 살아남은 메뉴에만 가산점
                     scores[scores > 0] += tag_match.astype(float)[scores > 0] * 1.0
 
         # 정규화 (유지)
@@ -531,7 +619,7 @@ async def startup():
 
     # 1. AI A 시작 로직
     preprocessor = MenuDataPreprocessor()
-    preprocessor.load_nutrition_data()  # (수정됨) DB에서 로드 시도
+    preprocessor.load_nutrition_data()  # (수정됨) N:M DB에서 로드 시도
     preprocessor.extract_features()
     print("✅ (AI A) 데이터 전처리 모듈 준비 완료!")
 
@@ -552,7 +640,7 @@ async def root():
     return {
         "service": "MenuMate AI (Combined A+B)",
         "status": "running",
-        "version": "2.3.0 (Strong Filters, DB Load, With Tags)",
+        "version": "2.6.0 (Rating, Time, Campus Filters)",
         "llm_ready": (chain is not None),
         "preprocessor_ready": (preprocessor is not None and preprocessor.menu_df is not None),
         "db_connected": (preprocessor is not None and preprocessor.db_engine is not None)
@@ -684,10 +772,11 @@ async def get_recommendation(user_input: UserInput):
     """
     try:
         # 1. 입력 형식 변환
-        print(f"입력 받음: category={user_input.category}, meals={user_input.meals}, prompt='{user_input.prompt}'")
+        print(
+            f"입력 받음: category={user_input.category}, meals={user_input.meals}, prompt='{user_input.prompt}', location={user_input.location}")
         preferences = convert_user_input(user_input)
         print(
-            f"변환 완료: target_meals={preferences.target_meals}, category={preferences.category}, low_calorie={preferences.prefer_low_calorie}")
+            f"변환 완료: meal_type={preferences.meal_type}, category={preferences.category}, location={preferences.location}")
 
         # 2. AI A 로직 호출 (강력 필터 적용)
         print(f"1단계: 후보군 생성 시작")
@@ -721,7 +810,8 @@ async def get_full_recommendation(preferences: UserPreferences):
     기존 UserPreferences 형식을 사용하는 엔드포인트 (하위 호환성)
     """
     try:
-        print(f"1단계: 후보군 생성 시작 (User: {preferences.user_prompt}, Category: {preferences.category})")
+        print(
+            f"1단계: 후보군 생성 시작 (User: {preferences.user_prompt}, Category: {preferences.category}, Location: {preferences.location})")
         candidate_request = await _generate_candidates(preferences)
 
         if not candidate_request.candidates:
@@ -752,8 +842,12 @@ async def get_all_menus():
         raise HTTPException(status_code=503, detail="데이터가 로드되지 않음")
 
     df = preprocessor.menu_df.copy()
-    # '태그'가 리스트이므로 문자열로 변환
+    # 리스트 형태의 컬럼들을 문자열로 변환
     df['태그'] = df['태그'].apply(lambda x: ','.join(x) if isinstance(x, list) else '')
+    df['카테고리'] = df['카테고리'].apply(lambda x: ','.join(x) if isinstance(x, list) else '')
+    # 시간 객체를 문자열로 변환
+    df['오픈시간'] = df['오픈시간'].apply(lambda x: x.strftime('%H:%M:%S') if isinstance(x, time) else None)
+    df['마감시간'] = df['마감시간'].apply(lambda x: x.strftime('%H:%M:%S') if isinstance(x, time) else None)
 
     return df.to_dict(orient='records')
 
